@@ -25,23 +25,18 @@ function fixHead($compile, $window) {
             }, header = {
                 clone: headerClone,
                 original: $element
-            }, parentContainer = table.original.parent(),
+            }, cells,
+                parentContainer = table.original.parent(),
                 scrollContainer = getScrollContainer(table.original);
 
-            table.clone.css({display: 'block', overflow: 'hidden', position: 'relative'}).addClass('clone');
-            header.clone.css('display', 'block');
+            table.clone.css({overflow: 'hidden', position: 'relative'}).addClass('clone');
             header.original.css('visibility', 'hidden');
 
             insertIntoDom();
             compileClonedTable();
-
-            getElementToAttachScroll().on('scroll', function () {
-                // use CSS transforms to move the cloned header when the table is scrolled horizontally
-                header.clone.css('transform', 'translate3d(' + -(scrollContainer.prop('scrollLeft')) + 'px, 0, 0)');
-                updateHeaderPosition();
-            });
-
-            $scope.$watch(cells, updateCells);
+            addWatchToReassignCells();
+            addWatchForHeaderHeight();
+            updatePositionOnScroll();
 
             header.original.on('$destroy', function () {
                 header.clone.remove();
@@ -55,8 +50,82 @@ function fixHead($compile, $window) {
             function insertHeaderCloneToCompileWithProperLinking() {
                 header.original.after(header.clone);
             }
+
             function compileClonedTable() {
                 $compile(table.clone)($scope);
+            }
+
+            function addWatchToReassignCells() {
+                $scope.$watch(getCalculatedClonedCellCount, reassignCellsAndInitialize);
+            }
+            function getCalculatedClonedCellCount() {
+                return header.clone.find("th").length;
+            }
+            function reassignCellsAndInitialize() {
+                cells = {
+                    clone: getCells(header.clone),
+                    original: getCells(header.original)
+                };
+                addWatchToMatchCellWidths();
+            }
+            function getCells(node) {
+                return Array.prototype.map.call(node.find('th'), function (cell) {
+                    return angular.element(cell);
+                });
+            }
+            function addWatchToMatchCellWidths() {
+                cells.clone.forEach(function (cloned, idx) {
+                    addWatchToMatchWidthIfNecessary(cloned, cells.original[idx]);
+                });
+            }
+            function addWatchToMatchWidthIfNecessary(clonedCell, originalCell) {
+                if (!isClonedCellMatchingWidth(clonedCell)) {
+                    addWatchToMatchWidth(clonedCell, originalCell);
+                }
+            }
+            function isClonedCellMatchingWidth(clonedCell) {
+                return clonedCell.data(ISWATCHING);
+            }
+            function addWatchToMatchWidth(clonedCell, originalCell) {
+                var listener = $scope.$watch(getOriginalWidth, setClonedWidth);
+                assignWatchIsEngaged(clonedCell);
+                clonedCell.on("$destroy", function () {
+                    listener();
+                });
+                originalCell.on("$destroy", function () {
+                    clonedCell.remove();
+                });
+
+                function getOriginalWidth() {
+                    return $window.getComputedStyle(originalCell[0]).width;
+                }
+                function setClonedWidth(newWidth) {
+                    clonedCell.css({minWidth: newWidth, maxWidth: newWidth});
+                }
+                function assignWatchIsEngaged() {
+                    clonedCell.data(ISWATCHING, true);
+                }
+            }
+
+            function addWatchForHeaderHeight() {
+                $scope.$watch(getOriginalHeaderHeight, setHeightToHideOriginalHeader);
+            }
+            function getOriginalHeaderHeight() {
+                return header.original.prop("clientHeight");
+            }
+            function setHeightToHideOriginalHeader(height) {
+                table.original.css("marginTop", "-" + height + "px");
+            }
+
+            function getElementToAttachScroll() {
+                if (isHtml(scrollContainer)) {
+                    return angular.element($window);
+                } else {
+                    return scrollContainer;
+                }
+            }
+            function isHtml(node) {
+                return (node[0].tagName === "HTML");
             }
 
             function getScrollContainer(node) {
@@ -78,14 +147,16 @@ function fixHead($compile, $window) {
                 }
                 return false;
             }
-            function isHtml(node) {
-                return (node[0].tagName === "HTML");
-            }
             function isNonHtmlScrollable(node) {
                 var overflowY = node.css("overflow-y");
                 return (overflowY === "scroll" || overflowY === "auto");
             }
 
+            function updatePositionOnScroll() {
+                getElementToAttachScroll().on("scroll", function () {
+                    updateHeaderPosition();
+                });
+            }
             function updateHeaderPosition() {
                 var top = getTopValue();
                 table.clone.css("top", top + "px");
@@ -108,77 +179,6 @@ function fixHead($compile, $window) {
             }
             function getTableTop() {
                 return table.original[0].offsetTop;
-            }
-
-            function getElementToAttachScroll() {
-                if (isHtml(scrollContainer)) {
-                    return angular.element($window);
-                } else {
-                    return scrollContainer;
-                }
-            }
-
-            function cells() {
-                return header.clone.find('th').length;
-            }
-
-            function getCells(node) {
-                return Array.prototype.map.call(node.find('th'), function (cell) {
-                    return jQLite(cell);
-                });
-            }
-
-            function height() {
-                return header.original.prop('clientHeight');
-            }
-
-            function jQLite(node) {
-                return angular.element(node);
-            }
-
-            function marginTop(height) {
-                table.original.css('marginTop', '-' + height + 'px');
-            }
-
-            function updateCells() {
-                var cells = {
-                    clone: getCells(header.clone),
-                    original: getCells(header.original)
-                };
-
-                cells.clone.forEach(function (clone, index) {
-                    if (clone.data('isClone')) {
-                        return;
-                    }
-
-                    // prevent duplicating watch listeners
-                    clone.data('isClone', true);
-
-                    var cell = cells.original[index];
-                    var style = $window.getComputedStyle(cell[0]);
-
-                    var getWidth = function () {
-                        return style.width;
-                    };
-
-                    var setWidth = function () {
-                        marginTop(height());
-                        clone.css({minWidth: style.width, maxWidth: style.width});
-                    };
-
-                    var listener = $scope.$watch(getWidth, setWidth);
-
-                    $window.addEventListener('resize', setWidth);
-
-                    clone.on('$destroy', function () {
-                        listener();
-                        $window.removeEventListener('resize', setWidth);
-                    });
-
-                    cell.on('$destroy', function () {
-                        clone.remove();
-                    });
-                });
             }
         };
     }
